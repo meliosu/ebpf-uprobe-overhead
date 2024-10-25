@@ -16,34 +16,50 @@ __attribute__((noinline)) int uprobed_add(int a, int b) {
     return a + b;
 }
 
-int main() {
-    int err;
-    int iters = 1 * 1000 * 1000;
+static void report_time(struct timespec *beg, struct timespec *end, int iters,
+                        char *label) {
+    printf("%s: %ld ns/call\n", label,
+           ((end->tv_nsec - beg->tv_nsec) +
+            (end->tv_sec - beg->tv_sec) * 1000000000) /
+               iters);
+}
 
-    struct uprobe_bpf *object = uprobe_bpf__open_and_load();
-    if (!object) {
-        panic("open_and_load");
-    }
-
-    err = uprobe_bpf__attach(object);
-    if (err) {
-        panic("attach");
-    }
-
-    struct timespec beg;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &beg);
+static void bench_uprobed_add(struct timespec *beg, struct timespec *end,
+                              int iters) {
+    clock_gettime(CLOCK_MONOTONIC_RAW, beg);
 
     for (int i = 0; i < iters; i++) {
         uprobed_add(0, 0);
     }
 
-    struct timespec end;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+    clock_gettime(CLOCK_MONOTONIC_RAW, end);
+}
 
-    long time_ns =
-        end.tv_nsec - beg.tv_nsec + (end.tv_sec - beg.tv_sec) * 1000000000;
+int main() {
+    int iters = 1 * 1000 * 1000;
 
-    printf("ns/call: %ld\n", time_ns / iters);
+    struct uprobe_bpf *object = uprobe_bpf__open_and_load();
+    if (!object) {
+        panic("open and load");
+    }
+
+    struct timespec beg, end;
+
+    object->links.uprobe = bpf_program__attach(object->progs.uprobe);
+    if (!object->links.uprobe) {
+        panic("error attaching");
+    }
+
+    bench_uprobed_add(&beg, &end, iters);
+    report_time(&beg, &end, iters, "uprobe");
+
+    object->links.uretprobe = bpf_program__attach(object->progs.uretprobe);
+    if (!object->links.uretprobe) {
+        panic("error attaching");
+    }
+
+    bench_uprobed_add(&beg, &end, iters);
+    report_time(&beg, &end, iters, "uprobe + uretprobe");
 
     uprobe_bpf__destroy(object);
 }
